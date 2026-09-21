@@ -1,0 +1,7 @@
+aiohttp
+centrifuge-python
+python-dotenv
+python-telegram-bot
+streamlit
+plotly
+pandas
