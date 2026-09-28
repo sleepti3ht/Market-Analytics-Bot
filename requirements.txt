@@ -5,3 +5,4 @@ python-telegram-bot
 streamlit
 plotly
 pandas
+mcp>=1.2,<2
