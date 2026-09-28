@@ -35,7 +35,27 @@
 - **Tunneled dashboard access** — share the dashboard via a free public URL (cloudflared → auto-fallback to SSH localhost.run) without hosting; optional "Open Dashboard" button in the bot menu
 
 ---
+## 💡 Why This Matters
 
+Most arbitrage bots naively compare listing prices and spam "1600% profit!" signals. The problem? P2P marketplaces are full of:
+- **Fake listings** — one seller lists a $0.78 item for $87k (no buyers)
+- **Illiquid items** — "profitable" but nobody buys them for weeks
+- **Micro-garbage** — $0.01 → $0.05 flips that don't cover fees
+
+**This bot filters noise, not just prices:**
+- Trusts `avg_price` (real 7-day sales) over `ask_price` (wishful thinking)
+- Requires minimum absolute profit in € (not just %) — kills micro-trades
+- Sanity cap: `market_price / buy_price > 10` → skipped as data anomaly
+- Liquidity filter: only items with real trading volume
+
+**Result:** 5-10 clean signals per day instead of 1000+ garbage alerts.
+
+**Engineering highlights:**
+- Async queue with backpressure (maxsize 5000) prevents OOM during event floods
+- Hybrid WebSocket + REST polling ensures data freshness even if one source fails
+- Tunnel orchestration with healthcheck and fallback (cloudflared → SSH)
+- Whitelist-validated settings update via Telegram and MCP (no arbitrary code execution)
+---
 ## 🎯 Who Is This For?
 
 **Resellers who want profit, not gaming knowledge.**
@@ -94,29 +114,32 @@ F --> H
 
 ```
 arbitrage_bot/
-├── main.py                       # entry point: starts all loops
-├── config.py                     # env-based config (.env)
-├── shared_state.py               # shared runtime metrics (e.g. WebSocket latency)
-├── start_dashboard.py            # launch Streamlit + cloudflared tunnel
+├── main.py # entry point: starts all loops
+├── config.py # env-based config (.env)
+├── shared_state.py # shared runtime metrics (e.g. WebSocket latency)
+├── start_dashboard.py # launch Streamlit + cloudflared tunnel
+├── mcp_server.py # MCP server exposing tools for AI agents
+├── test_mcp_client.py # Self-test for MCP server
 ├── requirements.txt
-├── .env                           # secrets (NOT committed)
+├── .env.example # Template for .env (committed, no secrets)
+├── LICENSE # MIT license
 │
 ├── api/
-│   ├── lis_skins_ws.py           # Centrifuge WebSocket client + async queue
-│   └── market_csgo.py            # price polling parser
+│ ├── lis_skins_ws.py # Centrifuge WebSocket client + async queue
+│ └── market_csgo.py # price polling parser
 │
 ├── analyzer/
-│   └── metrics.py                # arbitrage logic & filters
+│ └── metrics.py # arbitrage logic & filters
 │
 ├── storage/
-│   └── db.py                     # SQLite, migrations, settings
+│ └── db.py # SQLite, migrations, settings
 │
 ├── notifications/
-│   ├── telegram_app.py           # Telegram bot menu (stats/settings/status)
-│   └── telegram_bot.py           # signal notifications
+│ ├── telegram_app.py # Telegram bot menu (stats/settings/status)
+│ └── telegram_bot.py # signal notifications
 │
 └── dashboard/
-    └── app.py                    # Streamlit analytics dashboard
+└── app.py # Streamlit analytics dashboard
 ```
 
 ---
@@ -131,17 +154,21 @@ arbitrage_bot/
 
 ### 2. Environment
 
-Create your own `.env` (there is no committed `.env.example` — keep secrets private):
+Copy the template and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your real credentials:
 
 ```ini
-# .env
-LIS_SKINS_API_KEY=your_lis_skins_api_key
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+LIS_SKINS_API_KEY=your_real_key_here
+TELEGRAM_BOT_TOKEN=your_real_token_here
 TELEGRAM_CHAT_ID=your_chat_id
 
 # --- Recommended: user allowlist ---
 # Only these Telegram user IDs can use the bot. Find yours via @userinfobot.
-# Comma-separated. Leave empty to disable the allowlist (open to everyone).
 ALLOWED_USER_IDS=123456789
 
 # --- Optional: public dashboard URL (see "Dashboard behind a tunnel") ---
@@ -155,10 +182,12 @@ SAFETY_PERCENT=3
 MARKET_REFRESH_SECONDS=60
 ```
 
+> **Note:** `.env.example` is committed (safe template). Your `.env` with real secrets is in `.gitignore` and never pushed.
+
 ### 3. Run
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt  # installs mcp along with other deps
 python main.py
 ```
 
@@ -274,6 +303,70 @@ Example:
   </tr>
 </table>
 
+---
+
+## 🤖 MCP Server
+
+This project includes an MCP (Model Context Protocol) server that exposes bot data as standardized tools for AI agents.
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `get_latest_signals` | Return latest arbitrage signals (limit ≤ 50) |
+| `find_signals` | Search signals by item name substring |
+| `get_stats` | Aggregate stats: signal count, cached prices, avg/total profit |
+| `get_settings` | Current filter settings |
+| `update_setting` | Safely update a filter (whitelist-validated) |
+
+### Usage
+
+**Standalone (stdio):**
+```bash
+python mcp_server.py
+```
+
+**Self-test client:**
+```bash
+python test_mcp_client.py
+```
+
+**Connect to an MCP client:**
+
+- **Claude Desktop** (`%APPDATA%\Claude\claude_desktop_config.json`):
+  ```json
+  {
+    "mcpServers": {
+      "market-analytics-bot": {
+        "command": "C:\\path\\to\\arbitrage_bot\\.venv\\Scripts\\python.exe",
+        "args": ["C:\\path\\to\\arbitrage_bot\\mcp_server.py"]
+      }
+    }
+  }
+  ```
+
+- **Continue** (`.continue/config.yaml`):
+  ```yaml
+  mcpServers:
+    - name: market-analytics-bot
+      command: C:\\path\\to\\.venv\\Scripts\\python.exe
+      args:
+        - C:\\path\\to\\mcp_server.py
+  ```
+
+- **Custom agent** (Python):
+  ```python
+  from mcp import ClientSession, StdioServerParameters
+  from mcp.client.stdio import stdio_client
+  
+  params = StdioServerParameters(command="python", args=["mcp_server.py"])
+  async with stdio_client(params) as (read, write):
+      async with ClientSession(read, write) as session:
+          await session.initialize()
+          tools = await session.list_tools()
+          # use tools...
+  ```
+
 
 ---
 
@@ -286,6 +379,8 @@ These are potential enhancements, not bugs:
 - **Backtesting** — validate filters on historical data
 - **Bidirectional arbitrage** — warn when LIS is overpriced vs Market
 - **Auto-buy (dry-run first)** — cooldowns, daily caps, manual confirm
+
+---
 
 Contributions welcome! Open an issue if you want to work on any of these.
 
