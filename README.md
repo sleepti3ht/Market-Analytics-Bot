@@ -1,4 +1,6 @@
-# CS2 Skins analytic bot
+<div align="center">
+  
+# CS2 Skins analytics bot
 
 [![python](https://img.shields.io/badge/python-3.12+-black?style=flat&logo=python&color=18181b)](https://python.org)
 [![asyncio](https://img.shields.io/badge/asyncio-native-black?style=flat&color=18181b)](https://docs.python.org/3/library/asyncio.html)
