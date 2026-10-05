@@ -1,391 +1,119 @@
-# 🎯 Market Analytics Bot
+# CS2 Skins analytic bot
 
-> **Real-time market signals bot for CS:GO skins.** Watches new items on LIS-SKINS (WebSocket), compares them against real Market.CSGO prices, filters out garbage, and pushes profitable signals to Telegram + a Streamlit dashboard.
+[![python](https://img.shields.io/badge/python-3.12+-black?style=flat&logo=python&color=18181b)](https://python.org)
+[![asyncio](https://img.shields.io/badge/asyncio-native-black?style=flat&color=18181b)](https://docs.python.org/3/library/asyncio.html)
+[![status](https://img.shields.io/badge/status-production_ready-black?style=flat&color=18181b)]()
+[![license](https://img.shields.io/badge/license-MIT-black?style=flat&color=18181b)](LICENSE)
 
-![python](https://img.shields.io/badge/Python-3.11%2B-blue)
-![status](https://img.shields.io/badge/status-active-success)
+</div>
 
----
+> ⚡ Real-time P2P market arbitrage analytics engine. Sub-100ms WebSocket ingestion, multi-tier anomaly filtering, Streamlit dashboard, and MCP server for AI agents.
 
-## ✨ Features
-
-### Data Pipeline
-- **Real-time ingestion** — Centrifuge WebSocket (`public:obtained-skins`) with an async queue (maxsize 5000) and a worker to survive event floods
-- **Market price polling** — Market.CSGO price list (~340k items) refreshed every 60s
-- **Robust payload parser** — handles 4 different WebSocket payload formats
-- **DB auto-migration** — schema upgrades on startup (`PRAGMA` + `ALTER TABLE`)
-
-### Arbitrage Intelligence
-- **Ignores fake prices** — on P2P marketplaces one seller can list a $0.78 item for $87k. The bot trusts real data instead:
-  1. `avg_price` — average of actual 7-day sales
-  2. `buy_order` — real buy offers (bids)
-  3. `ask price` — last resort, guarded by sanity limits
-- **Garbage protection**:
-  - liquidity filter (`popularity_7d`)
-  - minimum absolute profit in € (not just %) — kills "1600% profit" illusions on micro-trades
-  - sanity cap: `market_price / buy_price > 10` → skipped as data anomaly (a cheap $0.5 → $3 flip is a legit +500%, so the cap is generous)
-  - auto-cleanup of signals with `profit_percent > 500%` on every startup
-- **Deduplication** — by `lis_item_id` (UNIQUE constraint)
-
-### Notification & Visualization
-- **Telegram bot** — stats, status, configurable filters via `/update_field` (with examples)
-- **User allowlist** — only authorized Telegram IDs can use the bot
-- **Live latency metric** — WebSocket event latency (ms) exposed in bot status/stats
-- **Streamlit dashboard** — ROI, profit €, time-series scatter, TOP-10, distribution histogram, CSV export
-- **Tunneled dashboard access** — share the dashboard via a free public URL (cloudflared → auto-fallback to SSH localhost.run) without hosting; optional "Open Dashboard" button in the bot menu
-
----
-## 💡 Why This Matters
-
-Most arbitrage bots naively compare listing prices and spam "1600% profit!" signals. The problem? P2P marketplaces are full of:
-- **Fake listings** — one seller lists a $0.78 item for $87k (no buyers)
-- **Illiquid items** — "profitable" but nobody buys them for weeks
-- **Micro-garbage** — $0.01 → $0.05 flips that don't cover fees
-
-**This bot filters noise, not just prices:**
-- Trusts `avg_price` (real 7-day sales) over `ask_price` (wishful thinking)
-- Requires minimum absolute profit in € (not just %) — kills micro-trades
-- Sanity cap: `market_price / buy_price > 10` → skipped as data anomaly
-- Liquidity filter: only items with real trading volume
-
-**Result:** 5-10 clean signals per day instead of 1000+ garbage alerts.
-
-**Engineering highlights:**
-- Async queue with backpressure (maxsize 5000) prevents OOM during event floods
-- Hybrid WebSocket + REST polling ensures data freshness even if one source fails
-- Tunnel orchestration with healthcheck and fallback (cloudflared → SSH)
-- Whitelist-validated settings update via Telegram and MCP (no arbitrary code execution)
----
-## 🎯 Who Is This For?
-
-**Resellers who want profit, not gaming knowledge.**
-
-You don't need to know:
-- What "StatTrak™ M4A4 | Howl" is
-- Why "Karambit | Fade" costs $2000
-- How CS:GO skins work
-
-You just need:
-- A LIS-SKINS API key
-- A Market.CSGO account
-- This bot
-
-The bot handles the rest: filters noise, finds real profit, sends signals.
-
-## 🔄 How It Works
-
-```mermaid
-graph TD
-%% --- Styles ---
-classDef source fill:#2d3748,stroke:#4a5568,color:#fff,stroke-width:2px;
-classDef core fill:#4c51bf,stroke:#434190,color:#fff,stroke-width:2px;
-classDef analytics fill:#ed8936,stroke:#dd6b20,color:#fff;
-classDef output fill:#38b2ac,stroke:#319795,color:#fff;
-
-subgraph "1. Data Collection"
-    A[LIS-SKINS<br/>WebSocket 0–100ms]:::source
-    B[Market.CSGO<br/>REST polling 60s<br/>~340k items]:::source
-end
-
-subgraph "2. Core Engine"
-    C[Async item queue<br/>maxsize 5000]:::core
-    D[(Price cache<br/>SQLite)]:::core
-    E[Arbitrage filters<br/>buy price / liquidity<br/>sale price: avg → buy_order → ask<br/>profit % and € after fees]:::analytics
-end
-
-subgraph "3. Output"
-    F[Signal]:::output
-    G[Telegram bot<br/>notifications + menu]:::output
-    H[Streamlit dashboard<br/>metrics / scatter / TOP-10]:::output
-end
-
-A --> C
-B --> D
-C --> E
-D --> E
-E --> F
-F --> G
-F --> H
-```
-
----
-
-## 📁 Project Structure
-
-```
-arbitrage_bot/
-├── main.py # entry point: starts all loops
-├── config.py # env-based config (.env)
-├── shared_state.py # shared runtime metrics (e.g. WebSocket latency)
-├── start_dashboard.py # launch Streamlit + cloudflared tunnel
-├── mcp_server.py # MCP server exposing tools for AI agents
-├── test_mcp_client.py # Self-test for MCP server
-├── requirements.txt
-├── .env.example # Template for .env (committed, no secrets)
-├── LICENSE # MIT license
-│
-├── api/
-│ ├── lis_skins_ws.py # Centrifuge WebSocket client + async queue
-│ └── market_csgo.py # price polling parser
-│
-├── analyzer/
-│ └── metrics.py # arbitrage logic & filters
-│
-├── storage/
-│ └── db.py # SQLite, migrations, settings
-│
-├── notifications/
-│ ├── telegram_app.py # Telegram bot menu (stats/settings/status)
-│ └── telegram_bot.py # signal notifications
-│
-└── dashboard/
-└── app.py # Streamlit analytics dashboard
-```
-
----
-
-## 🚀 Setup
-
-### 1. Prerequisites
-
-- Python 3.11+
-- LIS-SKINS API key
-- Telegram Bot token (+ your chat id)
-
-### 2. Environment
-
-Copy the template and fill in your values:
+## Get started
 
 ```bash
+# 1. Clone and setup environment
 cp .env.example .env
-```
+# Edit .env with LIS_SKINS_API_KEY, TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS
 
-Then edit `.env` with your real credentials:
+# 2. Install dependencies (KISS approach: venv, no Docker)
+python -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+pip install -r requirements.txt
 
-```ini
-LIS_SKINS_API_KEY=your_real_key_here
-TELEGRAM_BOT_TOKEN=your_real_token_here
-TELEGRAM_CHAT_ID=your_chat_id
-
-# --- Recommended: user allowlist ---
-# Only these Telegram user IDs can use the bot. Find yours via @userinfobot.
-ALLOWED_USER_IDS=123456789
-
-# --- Optional: public dashboard URL (see "Dashboard behind a tunnel") ---
-# DASHBOARD_URL=
-
-# Settings (optional)
-MARKET_CSGO_CURRENCY=EUR
-MIN_PROFIT_PERCENT=15
-MARKET_CSGO_FEE_PERCENT=5
-SAFETY_PERCENT=3
-MARKET_REFRESH_SECONDS=60
-```
-
-> **Note:** `.env.example` is committed (safe template). Your `.env` with real secrets is in `.gitignore` and never pushed.
-
-### 3. Run
-
-```bash
-pip install -r requirements.txt  # installs mcp along with other deps
+# 3. Run core engine
 python main.py
 ```
 
-### 4. Dashboard (local)
-
-In a separate terminal:
-
-```bash
-streamlit run dashboard/app.py
-```
-
-### 5. Dashboard behind a tunnel (no hosting)
-
-Get a free public URL for the dashboard without deploying anywhere:
-
-```bash
-python start_dashboard.py
-```
-
-How it works:
-1. Launches Streamlit locally.
-2. Tries **cloudflared** (if the binary is present) — and actually verifies
-   the URL responds with HTTP 200. If the network blocks Cloudflare
-   (UDP/TCP 7844 blocked ⇒ 530 error), it automatically falls back to an
-   **SSH tunnel via localhost.run** (needs only OpenSSH, built into Windows).
-3. Prints the public URL and auto-writes `DASHBOARD_URL` into your `.env`.
-
-The bot re-reads `DASHBOARD_URL` lazily on every menu render, so the
-**🧭 Open Dashboard** button always points to the current tunnel URL —
-no bot restart needed.
-Note: the tunnel URL lasts while the script is running.
+> **Dashboard:** Run `python start_dashboard.py` in a separate terminal. It automatically provisions a public URL via `cloudflared` with an SSH (`localhost.run`) fallback if UDP/TCP 7844 is blocked.
 
 ---
 
-## ⚡ Performance
+## 🔋 Batteries Included
 
-- **WebSocket latency:** 0-100ms (LIS-SKINS → queue)
-- **Market polling:** ~340k items every 60s
-- **Queue throughput:** handles event floods (maxsize 5000)
-- **Memory footprint:** ~50-100MB (SQLite + async workers)
-- **Uptime:** 24/7 on VPS (systemd service)
+**📡 Data Pipeline**
+- **Hybrid ingestion:** Centrifuge WebSocket (`public:obtained-skins`) for sub-100ms signals + REST polling (~340k items / 60s) as a freshness fallback.
+- **Backpressure handling:** `asyncio.Queue` with `maxsize=5000` prevents OOM during event floods.
+- **Resilient parsing:** Handles 4 distinct WebSocket payload formats gracefully.
 
-## 🤖 Telegram Bot
+**🧠 Arbitrage Intelligence**
+- **Hierarchy of trust:** Prioritizes `avg_price` (7-day actual sales) → `buy_order` (real bids) → `ask_price` (guarded by sanity limits).
+- **Noise filtration:** 
+  - Absolute profit floor in € (kills "1600% profit" illusions on $0.01 micro-trades).
+  - Liquidity filter (`popularity_7d`).
+  - Sanity cap: `market_price / buy_price > 10` is auto-skipped as a data anomaly.
+- **Data integrity:** Atomic deduplication via SQLite `INSERT OR IGNORE` on `lis_item_id`.
 
-| Command | Description |
-|---|---|
-| `/start` | Opens main menu (Stats / Settings / Status) |
-| `/update_field <key> <value>` | Change a filter setting |
-| `/status` | Show current settings |
+**📊 Observability & Control**
+- **Telegram interface:** Whitelist-only access (`ALLOWED_USER_IDS`), live WebSocket latency metrics, and dynamic `/update_field` configuration.
+- **Streamlit dashboard:** ROI tracking, time-series scatter plots, TOP-10 tables, and CSV export.
+- **Auto-migration:** Schema upgrades (`PRAGMA` + `ALTER TABLE`) executed safely on startup.
 
-`/status` additionally shows the **latest WebSocket latency** (ms), updated live from the event stream.
+**🤖 AI Agent Ready (MCP)**
+- Built-in Model Context Protocol server exposing typed tools (`get_latest_signals`, `update_setting`) for LLM agents.
+- Whitelist-validated tool execution prevents arbitrary state mutation.
 
-> **Access control:** only users listed in `ALLOWED_USER_IDS` can use the bot.
-> Anyone else gets ignored (no reply), so a randomly-discovered bot is useless to outsiders.
+---
 
-### Filterable Fields
+## Why market-analytics-bot
 
-| Key | Default | Meaning |
-|---|---|---|
-| `min_price` | `0` | min buy price on LIS (€) |
-| `max_price` | `1000` | max buy price on LIS (€) |
-| `min_profit_percent` | `15` | min profit in % (after fees) |
-| `min_abs_profit` | `0.3` | min profit in € — kills micro-garbage |
-| `min_liquidity` | `1` | min 7-day sales popularity |
-| `max_liquidity` | `1000` | max 7-day sales popularity |
+Naive arbitrage bots compare raw listing prices and spam false positives. P2P marketplaces are saturated with:
+- **Fake listings:** $0.78 items listed for $87k by a single seller.
+- **Illiquid assets:** "Profitable" items with zero 7-day trading volume.
+- **Micro-garbage:** Flips that do not cover platform fees.
 
-Example:
+**This engine filters noise, not just prices.** It delivers 5–10 high-confidence signals per day instead of 1000+ garbage alerts.
 
-```
-/update_field min_abs_profit 5
-→ ✅ Field min_abs_profit updated successfully.
+---
+
+## How it works
+
+```mermaid
+graph TD
+    classDef source fill:#f4f4f5,stroke:#18181b,color:#18181b,stroke-width:1px;
+    classDef core fill:#e4e4e7,stroke:#18181b,color:#18181b,stroke-width:1px;
+    classDef output fill:#d4d4d8,stroke:#18181b,color:#18181b,stroke-width:1px;
+
+    A[LIS-SKINS WebSocket<br/>0-100ms]:::source --> C[Async Queue<br/>maxsize 5000]:::core
+    B[Market.CSGO REST<br/>60s polling]:::source --> D[(SQLite Cache<br/>TTL + Dedup)]:::core
+    
+    C --> E[Arbitrage Engine<br/>Liquidity + Sanity Caps<br/>Fee-adjusted ROI]:::core
+    D --> E
+    
+    E --> F[Telegram Bot<br/>Signals + Live Latency]:::output
+    E --> G[Streamlit Dashboard<br/>Metrics + TOP-10]:::output
+    E --> H[MCP Server<br/>AI Agent Tools]:::output
 ```
 
 ---
 
-## 📸 Screenshots
+## ⚠️ Architectural Considerations
 
-### 1. Telegram: main menu, status, stats & settings
-
-<table>
-  <tr>
-    <td align="center"><b>Menu</b><br/><img src="screenshots/telegram_menu.png" width="240"/></td>
-    <td align="center"><b>Stats</b><br/><img src="screenshots/stats.png" width="240"/></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Status</b><br/><img src="screenshots/status.png" width="240"/></td>
-    <td align="center"><b>Settings</b><br/><img src="screenshots/settings.png" width="240"/></td>
-  </tr>
-</table>
-
-### 2. Telegram: profitable signal notification
-
-<p align="center"><img src="screenshots/telegram_signal_message.png" width="600"/></p>
-
-### 3. Dashboard — top metrics
-
-<p align="center"><img src="screenshots/dashboard_metrics.png" width="700"/></p>
-
-### 4. Dashboard — time-series scatter
-
-<p align="center"><img src="screenshots/dashboard_time-series.png" width="700"/></p>
-
-### 5. Dashboard — TOP-10 table
-
-<p align="center"><img src="screenshots/dashboard_TOP-10.png" width="700"/></p>
-
-### 6. Bot console / logs
-
-<table>
-  <tr>
-    <td align="center"><img src="screenshots/terminal_logs_screenshot_1.png" width="480"/></td>
-    <td align="center"><img src="screenshots/terminal_logs_screenshot_2.png" width="480"/></td>
-  </tr>
-</table>
+*For contributors and advanced users:*
+1. **Rate Limiting:** Market.CSGO polling is empirically tuned to 60s intervals. Do not decrease `MARKET_REFRESH_SECONDS` below 45s without implementing exponential backoff, or you risk IP bans (HTTP 429).
+2. **Concurrency:** SQLite operates in WAL mode (`PRAGMA journal_mode=WAL`) to prevent `database is locked` errors during concurrent reads (Dashboard) and writes (Ingestion worker).
+3. **Floating-Point Math:** All financial calculations in `analyzer/metrics.py` strictly use `decimal.Decimal` to prevent precision loss during fee deductions.
 
 ---
 
-## 🤖 MCP Server
+## 🛠️ Management & Deployment
 
-This project includes an MCP (Model Context Protocol) server that exposes bot data as standardized tools for AI agents.
-
-### Tools
-
-| Tool | Description |
-|---|---|
-| `get_latest_signals` | Return latest arbitrage signals (limit ≤ 50) |
-| `find_signals` | Search signals by item name substring |
-| `get_stats` | Aggregate stats: signal count, cached prices, avg/total profit |
-| `get_settings` | Current filter settings |
-| `update_setting` | Safely update a filter (whitelist-validated) |
-
-### Usage
-
-**Standalone (stdio):**
-```bash
-python mcp_server.py
-```
-
-**Self-test client:**
-```bash
-python test_mcp_client.py
-```
-
-**Connect to an MCP client:**
-
-- **Claude Desktop** (`%APPDATA%\Claude\claude_desktop_config.json`):
+- **Local Dev:** `python main.py` + `streamlit run dashboard/app.py`
+- **Production:** Deployed as a `systemd` service on a minimal VPS (1 vCPU, 1GB RAM). Memory footprint remains stable at ~50-100MB.
+- **MCP Integration:** Add to Claude Desktop or Continue config:
   ```json
   {
     "mcpServers": {
-      "market-analytics-bot": {
-        "command": "C:\\path\\to\\arbitrage_bot\\.venv\\Scripts\\python.exe",
-        "args": ["C:\\path\\to\\arbitrage_bot\\mcp_server.py"]
+      "market-analytics": {
+        "command": "python",
+        "args": ["mcp_server.py"]
       }
     }
   }
   ```
 
-- **Continue** (`.continue/config.yaml`):
-  ```yaml
-  mcpServers:
-    - name: market-analytics-bot
-      command: C:\\path\\to\\.venv\\Scripts\\python.exe
-      args:
-        - C:\\path\\to\\mcp_server.py
-  ```
-
-- **Custom agent** (Python):
-  ```python
-  from mcp import ClientSession, StdioServerParameters
-  from mcp.client.stdio import stdio_client
-  
-  params = StdioServerParameters(command="python", args=["mcp_server.py"])
-  async with stdio_client(params) as (read, write):
-      async with ClientSession(read, write) as session:
-          await session.initialize()
-          tools = await session.list_tools()
-          # use tools...
-  ```
-
-
 ---
 
-## 🔮 Future Ideas
+## License
 
-These are potential enhancements, not bugs:
-
-- **Price history tracking** — store `avg_price` trends over time
-- **Smart scoring** — profit × liquidity × sale speed
-- **Backtesting** — validate filters on historical data
-- **Bidirectional arbitrage** — warn when LIS is overpriced vs Market
-- **Auto-buy (dry-run first)** — cooldowns, daily caps, manual confirm
-
----
-
-Contributions welcome! Open an issue if you want to work on any of these.
-
----
-
-## ⚠️ Disclaimer
-
-Educational / data-analytics project. **Not financial advice.** Trading skins involves real money — use at your own risk. P2P price data may be manipulated by bots; always verify before relying on signals.
+MIT
