@@ -1,4 +1,4 @@
-"""MCP server for Market Analytics Bot (portfolio project).
+"""MCP server for Market Analytics Bot.
 
 Exposes the bot's SQLite data and filter settings as MCP tools, so any
 MCP-compatible agent (Claude Desktop, Continue, custom harness) can query
